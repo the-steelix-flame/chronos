@@ -1,52 +1,35 @@
 import asyncio
 import zmq
 import zmq.asyncio
-import json
 import os
 import logging
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
-
-# Configure professional logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - [SWARM] - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler("swarm.log"), logging.StreamHandler()]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [SWARM] - %(message)s')
 
 class EngineClient:
     def __init__(self):
-        """Initializes async ZeroMQ sockets using .env configuration."""
+        """Initializes async ZeroMQ REQ socket for Notice Board architecture."""
         self.context = zmq.asyncio.Context()
-        
         host = os.getenv("ZMQ_HOST", "127.0.0.1")
-        order_port = os.getenv("ZMQ_ORDER_PORT", "5555")
-        tick_port = os.getenv("ZMQ_TICK_PORT", "5556")
+        port = os.getenv("ZMQ_ORDER_PORT", "5555")
+
+        self.req_socket = self.context.socket(zmq.REQ)
+        self.req_socket.connect(f"tcp://{host}:{port}")
         
-        self.pub_socket = self.context.socket(zmq.PUB)
-        self.pub_socket.connect(f"tcp://{host}:{order_port}")
-        
-        self.sub_socket = self.context.socket(zmq.SUB)
-        self.sub_socket.connect(f"tcp://{host}:{tick_port}")
-        self.sub_socket.setsockopt_string(zmq.SUBSCRIBE, "TICK_DATA")
-        
-        logging.info(f"Connected to Engine at {host} (PUB:{order_port}, SUB:{tick_port})")
+        logging.info(f"Connected to Notice Board at {host}:{port}")
+
+    async def fetch_state(self):
+        """Pulls the latest Level 2 LOB state from the Engine."""
+        await self.req_socket.send_json({"action": "FETCH_STATE"})
+        return await self.req_socket.recv_json()
 
     async def send_order(self, order_dict: dict):
-        payload = json.dumps(order_dict)
-        await self.pub_socket.send_string(f"ORDER_QUEUE {payload}")
+        """Sends an order and waits for the Engine's Partial Fill confirmation."""
+        await self.req_socket.send_json(order_dict)
+        return await self.req_socket.recv_json()
 
-    async def listen_for_ticks(self, callback_func):
-        while True:
-            message = await self.sub_socket.recv_string()
-            topic, data_str = message.split(" ", 1)
-            tick_data = json.loads(data_str)
-            asyncio.create_task(callback_func(tick_data))
-            
     def shutdown(self):
-        logging.info("Shutting down ZeroMQ connections...")
-        self.pub_socket.close()
-        self.sub_socket.close()
+        self.req_socket.close()
         self.context.term()
