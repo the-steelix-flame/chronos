@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import pandas as pd
 from stable_baselines3 import PPO
@@ -48,13 +49,20 @@ def extract_features(tick_data, inventory, max_capacity):
     
     return np.array([[vwap_dist, volatility, volume_ratio, rsi_norm, ofi, pos_norm]], dtype=np.float32)
 
+import random # Add this to the top of live_agents.py if not there
+
 class LiveWhaleAgent:
-    def __init__(self, agent_id, max_capacity=10000):
+    def __init__(self, agent_id):
         self.agent_id = agent_id
         self.inventory = 0
-        self.max_capacity = max_capacity
+        # PDF Specification: Whales between $5M - $20M
+        self.max_capacity = random.randint(5_000_000, 20_000_000)
+        self.is_asleep = False # For dynamic participation
         
     def on_price_update(self, tick_data):
+        if self.is_asleep:
+            return []
+            
         raw_obs = extract_features(tick_data, self.inventory, self.max_capacity)
         normalized_obs = whale_norm_env.normalize_obs(raw_obs)
         
@@ -70,16 +78,20 @@ class LiveWhaleAgent:
         mid_price = float(tick_data.get("order_book", tick_data).get("last_traded_price", tick_data.get("mid_price", 2500)))
         self.inventory += shares_to_trade 
         
-        # Wrapped in float() and int()
         return [{"agent_id": self.agent_id, "action": side, "price": float(mid_price), "qty": int(abs(shares_to_trade))}]
 
 class LiveMarketMaker:
-    def __init__(self, agent_id, max_capacity=5000):
+    def __init__(self, agent_id):
         self.agent_id = agent_id
         self.inventory = 0
-        self.max_capacity = max_capacity
+        # PDF Specification: Market Makers between $1M - $5M
+        self.max_capacity = random.randint(1_000_000, 5_000_000)
+        self.is_asleep = False
         
     def on_price_update(self, tick_data):
+        if self.is_asleep:
+            return []
+            
         raw_obs = extract_features(tick_data, self.inventory, self.max_capacity)
         normalized_obs = mm_norm_env.normalize_obs(raw_obs)
         action, _ = mm_model.predict(normalized_obs, deterministic=True)
@@ -92,8 +104,6 @@ class LiveMarketMaker:
             return []
 
         mid_price = float(tick_data.get("order_book", tick_data).get("last_traded_price", tick_data.get("mid_price", 2500)))
-        
-        # Force strict python floats here
         bid_price = float(round(mid_price * (1 - (float(bid_bps) / 10000)), 2))
         ask_price = float(round(mid_price * (1 + (float(ask_bps) / 10000)), 2))
         
@@ -105,9 +115,16 @@ class LiveMarketMaker:
 class LiveRetailAgent:
     def __init__(self, agent_id):
         self.agent_id = agent_id
+        # PDF Specification: Retail between $10k - $100k
+        self.cash = random.randint(10_000, 100_000)
+        self.inventory = 0
+        self.is_asleep = False
         
     def on_price_update(self, tick_data):
-        raw_obs = extract_features(tick_data, 0, 1000) 
+        if self.is_asleep or self.cash <= 1000: # Handled by liquidation loop next
+            return []
+            
+        raw_obs = extract_features(tick_data, self.inventory, self.cash) 
         action, _ = retail_model.predict(raw_obs)
         
         target_pct = action[0][0]
@@ -117,5 +134,18 @@ class LiveRetailAgent:
         side = "BUY" if target_pct > 0 else "SELL"
         mid_price = float(tick_data.get("order_book", tick_data).get("last_traded_price", tick_data.get("mid_price", 2500)))
         
-        # Wrapped in float() and int()
-        return [{"agent_id": self.agent_id, "action": side, "price": float(mid_price), "qty": int(abs(target_pct) * 500)}]
+        # Simplified execution for retail: assume market order fills instantly at mid
+        qty = int(abs(target_pct) * (self.cash / mid_price) * 0.5) # Use max 50% of cash per trade
+        
+        if qty == 0:
+            return []
+            
+        if side == "BUY":
+            self.cash -= (qty * mid_price)
+            self.inventory += qty
+        elif side == "SELL" and self.inventory > 0:
+            qty = min(qty, self.inventory)
+            self.cash += (qty * mid_price)
+            self.inventory -= qty
+        
+        return [{"agent_id": self.agent_id, "action": side, "price": float(mid_price), "qty": int(qty)}]
