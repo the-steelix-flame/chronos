@@ -2,3 +2,13 @@ venv/
 __pycache__/
 *.pyc
 swarm_orchestrator/.env
+
+# Runtime artifacts (never commit)
+swarm_orchestrator/.strategies/
+swarm_orchestrator/scripts_library/
+swarm_orchestrator/data/scenarios/
+*.db
+*.db-wal
+*.db-shm
+*.log
+

@@ -1,102 +1,125 @@
-# Project Chronos: Distributed Market Digital Twin
+# Project Chronos — Reactive Market Digital Twin
 
-Project Chronos is a high-performance, distributed stock market simulation powered by Agent-Based Modeling and Deep Reinforcement Learning. It generates a living, reactive Level 2 Limit Order Book (LOB) populated by concurrent AI and algorithmic agents, providing a realistic sandbox for financial backtesting and market shock analysis.
+Chronos is a **counterfactual, impact-aware market simulator**. Instead of replaying a frozen
+historical tape and assuming your trades had no effect (the "price-taker fallacy" every classic
+backtester makes), Chronos runs a **living limit-order-book** populated by AI and rule-based
+agents. When your strategy submits an order, it matches against real resting liquidity, **moves
+the price**, and the agent population re-prices on the next tick. The backtest stops being *"what
+happened"* and becomes *"what would have happened, with you in it."*
 
-## 🚀 System Architecture
+> **Phase-2 status — honest snapshot.** This is a **single-node** system: four cooperating
+> processes on one machine, talking over ZeroMQ. It is not multi-datacenter "distributed." What
+> *is* true and working: the price is now **produced only by real trades in the order book** (no
+> random walk), market impact is **emergent from real depth consumption** (no magic constants),
+> the AI market-makers **quote from their trained models** (not random spreads), and a user can
+> **submit a strategy that trades as a first-class participant** (Pillar 2) against a **replay of
+> real history that diverges the moment they trade** (Pillar 1).
 
-Chronos abandons traditional static backtesting in favor of a distributed microservice architecture. It operates via a pull-based **"Notice Board" Protocol** over TCP/IP, allowing independent agent swarms to run asynchronously across multiple physical or virtual nodes without suffering from OS-level CPU starvation or thread blocking.
+## Architecture — a two-plane exchange model
 
-### Core Components
-1. **The True Matching Engine (Server):** An ultra-fast, native Python dictionary-based Limit Order Book that actively matches Bids and Asks based on price priority, manages partial fills, and generates real-time market state JSON payloads (VWAP, 14-period RSI, Volatility, Order Flow Imbalance).
-2. **The Agent Swarm (Clients):** 100 concurrent algorithmic agents communicating via brokerless Inter-Process Communication (IPC).
-3. **The AI Brains (PyTorch/PPO):** Stable-Baselines3 Reinforcement Learning models trained to act as High-Frequency Market Makers and Institutional Whales.
-4. **The Macro Oracle (LLM Client):** An autonomous sentiment engine powered by the Google Gemini API that triggers exogenous market shocks based on simulated breaking financial news.
+Chronos mirrors how a real exchange separates its network traffic:
 
-## 🛠️ Tech Stack
+```
+  ORDER-ENTRY PLANE (reliable, TCP)          MARKET-DATA PLANE (push, one-to-many)
+  DEALER ──▶ engine ROUTER :5555             engine PUB :5556 ──▶ SUB subscribers
+  (agents, strategies, bridge, oracle,       (every book delta, trade print, and
+   FIX gateway — per-session identity,        event — sequence-numbered, like an
+   acks, sequence numbers — like FIX/TCP)     ITCH multicast feed, but over TCP)
+```
 
-* **Core Engine:** Python 3.11+, `asyncio`
-* **Networking Layer:** ZeroMQ (`pyzmq`) over TCP
-* **Machine Learning:** PyTorch, Stable-Baselines3 (PPO), OpenAI Gymnasium, Google GenAI SDK
-* **Data Processing:** Pandas, Numpy
-* **Architecture:** Microservices, Event-Driven, Distributed Systems
+- **Engine** (`engine/`) — a single-threaded, deterministic, **sequenced** matching core
+  (price-time priority, real depth, SQLite persistence). Determinism = replayable runs.
+- **Swarm** (`worker.py`, `core/`, `agents/`) — 15 PPO market-makers + 4 PPO whales + 80
+  heuristic retail, **push-driven** (subscribe to data, submit orders concurrently over a pooled
+  gateway — no more one-at-a-time serial loop).
+- **Runner** (`runner/`) — Pillar 2: a strategy **SDK** (`on_tick(state) -> orders`), a
+  **sandbox** (Docker / resource-guarded subprocess), and a **FIX 4.4 gateway**.
+- **Bridge** (`bridge.py`) — FastAPI + native WebSockets (ASGI, async — no thread-unsafe
+  sockets), serves the dashboard and the REST/WS API.
+- **Oracle** (`oracle.py`) — an **async** Gemini macro-news engine with a **real** local fallback
+  scorer (keyword-polarity matrix), sizing shocks from actual book depth (not magic constants).
+- **Dashboard** (`dashboard/`) — a professional trading terminal (MARKET / STRATEGY / RUNS tabs).
 
-## 🧠 The Agent Ecosystem
+The full interface contract is **[`swarm_orchestrator/PROTOCOL.md`](swarm_orchestrator/PROTOCOL.md)** —
+every message schema, port, and invariant. Read it before changing any interface.
 
-The simulation is driven by three distinct classes of market participants, utilizing a **Shared Brain Pattern** to optimize RAM utilization across the distributed network. 
+## Tech stack
 
-* **Market Makers (15 Agents):** High-Frequency traders initialized with $1M–$5M capital. They dynamically adjust their Bid/Ask spreads based on inventory risk and Order Flow toxicity.
-* **Institutional Whales (4 Agents):** Smart money initialized with $5M–$20M capital. Trained via PPO to ride macroeconomic trends and execute massive block trades while utilizing a Hysteresis deadzone to minimize commission burn.
-* **The Retail Swarm (80 Agents):** Heuristic algorithms initialized with $10k–$100k capital simulating chaotic, emotional trading based on real-time RSI crossovers. Controlled by a **Liquidation Engine** that actively monitors cash balances, instantly liquidating and respawning bankrupt agents to guarantee continuous market liquidity.
+Python 3.11+ · ZeroMQ (ROUTER/DEALER + PUB/SUB) · PyTorch + Stable-Baselines3 (PPO) ·
+Gymnasium · FastAPI + Uvicorn · SQLite · Google GenAI (Gemini) · simplefix · lightweight-charts
++ Monaco.
 
-## 🌪️ Market Physics & Dynamics
+## Setup
 
-* **Dynamic Participation:** Agents operate on randomized sleep/wake cycles. During quiet periods, only 30% of agents actively query the book to reduce network strain. Major news events awaken 100% of the swarm.
-* **Baseline Brownian Noise:** The engine continuously injects randomized synthetic volume into the Order Flow Imbalance (OFI). This noise scales dynamically with overall market volume, perfectly mimicking the microscopic algorithmic jitter of a tier-1 exchange.
-* **Macro-Injections & Fallback Matrix:** The Gemini Oracle parses breaking news sentiment (-1.0 to +1.0) and slams the engine with massive liquidity sweeps on severe events. A robust local Fallback Matrix ensures 100% uptime even if the LLM API hits rate limits.
-
-## ⚙️ Concurrency Features
-
-* **Pull-Based Notice Board:** Replaced legacy PUB/SUB broadcasts with a strict REQ/REP architecture, drastically reducing network bandwidth and CPU overhead.
-* **Deadlock Protection:** The Engine utilizes a `zmq.Poller` with strict 50ms timeouts to prevent system hangs if an agent node crashes mid-execution.
-* **High-Throughput IPC:** Capable of processing over 1,200 complex Neural Network forward passes and Level 2 JSON payload serializations per second locally.
-
-## 📦 Installation & Setup
-
-**1. Clone the repository:**
 ```bash
-git clone [https://github.com/aetherstackofficial/chronos_agents.git](https://github.com/aetherstackofficial/chronos_agents.git)
-cd chronos-agents
-
-2. **Create and activate a virtual environment:**
-
-   python -m venv venv
-   # On Windows:
-   venv\Scripts\activate
-   # On Mac/Linux:
-   source venv/bin/activate
-
-3. **Install Dependencies:**
-
-   # Navigate to the orchestrator directory where the requirements file lives
-   cd swarm_orchestrator
-
-   python -m pip install -r requirements.txt
-   # OR install manually:
-   python -m pip install pyzmq stable-baselines3[extra] gymnasium pandas numpy python-dotenv google-genai
-
-4. **Configure Environment Variables:**
-
-   ZMQ_HOST=127.0.0.1
-   ZMQ_ORDER_PORT=5555
-   GEMINI_API_KEY=your_gemini_api_key_here
+python -m venv venv
+venv\Scripts\activate            # Windows   (source venv/bin/activate on Unix)
+cd swarm_orchestrator
+pip install -r requirements.txt
+cp .env.example .env             # then edit .env — add your GEMINI_API_KEY
 ```
 
-## 🖥️ Running the Simulation
+> **Security:** never commit `.env`. It is gitignored. A previously-committed key must be treated
+> as compromised — rotate it and purge it from git history (`git filter-repo` / BFG).
 
-Due to the distributed microservice architecture, the components must be started in separate terminal processes. Ensure your virtual environment is activated in all three terminals.
+## Running
 
+Each component is its own process. From `swarm_orchestrator/`, in separate terminals:
+
+```bash
+# 1 · The matching engine (order plane :5555, data plane :5556)
+python -m engine.server
+
+# 2 · The AI swarm  (15 MM + 4 whales + 80 retail)
+python main.py                    #  == python worker.py --role all
+#     or run a single cohort:  python worker.py --role mm --count 15
+
+# 3 · The web bridge + dashboard   ->  http://localhost:8000
+python bridge.py
+
+# 4 · The Gemini macro-oracle
+python oracle.py
+
+# optional · institutional FIX gateway (:9878)
+python -m runner.fix_gateway
 ```
-Step 1: Start the Central Engine
-   Open Terminal 1 and run the Matching Engine:
-   cd swarm_orchestrator
-   python true_engine.py
 
-   The Engine will bind to tcp://127.0.0.1:5555 and wait for the swarm.
+Open **http://localhost:8000**, set a symbol & price, and **START SIMULATION**. Inject a news
+headline to watch the oracle gap the book. Load a historical CSV under **REPLAY** to run
+Pillar-1 mode; submit a strategy under the **STRATEGY** tab (Pillar 2).
 
-Step 2: Start the AI Swarm
-   Open Terminal 2 and initialize the agents:
-   cd swarm_orchestrator
-   python main.py
+## Testing
 
-   The Swarm loads the PyTorch models into RAM, connects to the Engine, and begins pulling data and executing trades.
-
-Step 3: Start the Macro Oracle
-   Open Terminal 3:
-   cd swarm_orchestrator
-   python oracle.py
-
-   The Oracle will monitor news feeds and inject sentiment-driven market shocks into the ecosystem.
+```bash
+cd swarm_orchestrator
+python -m pytest -q                      # unit + integration suite
+python scripts/smoke_e2e.py              # end-to-end: boots the engine, drives both planes
 ```
-# Built for advanced distributed systems research and algorithmic trading simulations.
-   
-   
+
+The suite guards the Phase-2 promises: order-book price-time priority, **ledger conservation**,
+**price is book-driven only**, **deterministic runs under a fixed seed**, the **replay→reactive
+latch**, and the oracle's real fallback matrix.
+
+## What changed from Phase 1
+
+| Phase-1 (demo) | Phase-2 (this build) |
+|---|---|
+| Price = `random.gauss` on every fetch | Price = **last real trade** in the book |
+| Impact = one magic constant, book wiped on >50k | **Emergent** from real depth consumption |
+| MM quoted **random** spreads | MM quotes from its **trained PPO** 3-D action |
+| Retail traded **random** 1–20 shares | Retail sizes by heuristic **conviction** |
+| 99 agents **pulled** state over one shared socket | Agents **subscribe** to a pushed feed, submit concurrently |
+| Flask-SocketIO, thread-unsafe socket | FastAPI + async WebSockets, single event loop |
+| No persistence | SQLite runs / ticks / trades / equity |
+| No way for a user to trade | Strategy **SDK + sandbox + FIX gateway** (Pillar 2) |
+| — | **History-repeater** replay that latches to reactive (Pillar 1) |
+| Broken `run_*.py`, dead code, leaked key | Parameterized `worker.py`, cleaned, key untracked |
+
+## Roadmap (not yet in this build)
+
+- **Model retraining** (real RSI feature, best-checkpoint selection, multi-asset) — deferred.
+- **New product features** (Monte-Carlo counterfactual fan, adversarial red-team agent, LLM
+  strategy copilot, crisis "time machine") — deferred.
+- **Calibration study** (simulated vs realised impact) and true multi-node distribution.
+
+See `Chronos_Phase2_Master_Plan.html` for the complete plan.
