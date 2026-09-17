@@ -12,3 +12,8 @@ swarm_orchestrator/data/scenarios/
 *.db-shm
 *.log
 
+# Notebook: the HTML source is tracked, the rendered PDF is a build artifact
+# (it lives on the OneDrive Desktop -- see notebook/build.py)
+notebook/*.pdf
+graphify-out/
+tech_stack_rationale.html

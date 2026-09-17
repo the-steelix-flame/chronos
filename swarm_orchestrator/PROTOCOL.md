@@ -195,7 +195,7 @@ agent_snapshots(run_id TEXT, seq INTEGER, agent_id TEXT, agent_type TEXT,
 ```
 Batched writes once per tick; readers (bridge) open read-only.
 
-## 8 · Engine behavioral spec (the No-Dummy core)
+## 8 · Engine behavioral spec
 
 1. **Price is ONLY produced by trades.** `last_price` changes exclusively when a fill occurs in
    the book. NO `random.gauss` price drift. Mid/micro derive from real best bid/ask.

@@ -27,6 +27,25 @@ Chronos mirrors how a real exchange separates its network traffic:
    acks, sequence numbers — like FIX/TCP)     ITCH multicast feed, but over TCP)
 ```
 
+The oracle adds a **third bind point** — a *service* socket rather than a plane. The bridge asks
+it to score a headline; it answers, and when the news is material it submits its own orders to the
+engine like any other participant:
+
+```
+  bridge DEALER "BRIDGE_ORACLE" ──▶ oracle ROUTER :5557
+                                      └─▶ DEALER "GEMINI_ORACLE" ──▶ engine ROUTER :5555
+```
+
+| Port | Socket | Bound by | Carries |
+|------|--------|----------|---------|
+| `5555` | `ROUTER` | engine | order entry + control — per-session identity, one ack per request |
+| `5556` | `PUB` | engine | market data — `tick` / `trade` / `event`, sequence-numbered |
+| `5557` | `ROUTER` | oracle | news-scoring requests from the bridge |
+| `8000` | HTTP/WS | bridge | dashboard, REST API, and the WebSocket fan-out of `5556` |
+
+All four are overridable via `ZMQ_ORDER_PORT` / `ZMQ_DATA_PORT` / `ORACLE_PORT` / `BRIDGE_PORT`
+(see [`.env.example`](swarm_orchestrator/.env.example)).
+
 - **Engine** (`engine/`) — a single-threaded, deterministic, **sequenced** matching core
   (price-time priority, real depth, SQLite persistence). Determinism = replayable runs.
 - **Swarm** (`worker.py`, `core/`, `agents/`) — 15 PPO market-makers + 4 PPO whales + 80
@@ -38,6 +57,8 @@ Chronos mirrors how a real exchange separates its network traffic:
   sockets), serves the dashboard and the REST/WS API.
 - **Oracle** (`oracle.py`) — an **async** Gemini macro-news engine with a **real** local fallback
   scorer (keyword-polarity matrix), sizing shocks from actual book depth (not magic constants).
+  Both a server (`ROUTER :5557`) and a client (`DEALER` into the engine) — the bridge never scores
+  news itself and never publishes on the data plane.
 - **Dashboard** (`dashboard/`) — a professional trading terminal (MARKET / STRATEGY / RUNS tabs).
 
 The full interface contract is **[`swarm_orchestrator/PROTOCOL.md`](swarm_orchestrator/PROTOCOL.md)** —
