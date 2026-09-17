@@ -60,6 +60,10 @@ log = logging.getLogger("chronos.bridge")
 ZMQ_HOST = os.getenv("ZMQ_HOST", "127.0.0.1")
 ZMQ_ORDER_PORT = os.getenv("ZMQ_ORDER_PORT", "5555")
 ZMQ_DATA_PORT = os.getenv("ZMQ_DATA_PORT", "5556")
+# Defaults to ZMQ_HOST (single-machine dev, where engine/oracle share a host). Set
+# ORACLE_HOST explicitly when the oracle lives on a different host/container than
+# the engine (e.g. Docker Compose, where each service gets its own hostname).
+ORACLE_HOST = os.getenv("ORACLE_HOST", ZMQ_HOST)
 ORACLE_PORT = os.getenv("ORACLE_PORT", "5557")
 BRIDGE_HOST = os.getenv("BRIDGE_HOST", "0.0.0.0")
 BRIDGE_PORT = int(os.getenv("BRIDGE_PORT", "8000"))
@@ -319,7 +323,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _oracle = _ctx.socket(zmq.DEALER)
     _oracle.setsockopt(zmq.IDENTITY, b"BRIDGE_ORACLE")
     _oracle.setsockopt(zmq.LINGER, 0)
-    _oracle.connect(f"tcp://{ZMQ_HOST}:{ORACLE_PORT}")
+    _oracle.connect(f"tcp://{ORACLE_HOST}:{ORACLE_PORT}")
 
     pump_task = asyncio.create_task(_pump())
     log.info("bridge online, serving http://%s:%s", BRIDGE_HOST, BRIDGE_PORT)

@@ -1,6 +1,17 @@
+# Python
 venv/
 __pycache__/
 *.pyc
+
+# Node (frontend/)
+node_modules/
+dist/
+build/
+
+# Environments
+.env
+*.env
+.env.*
 swarm_orchestrator/.env
 
 # Runtime artifacts (never commit)

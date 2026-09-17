@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    container_name: chronos_engine
+    ports:
+      - "5555:5555"
+      - "5556:5556"
+    environment:
+      - ZMQ_ORDER_PORT=5555
+      - ZMQ_DATA_PORT=5556
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('127.0.0.1', 5555)); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  oracle:
+    build:
+      context: .
+      dockerfile: Dockerfile.oracle
+    container_name: chronos_oracle
+    ports:
+      - "5557:5557"
+    environment:
+      - ZMQ_HOST=engine
+      - ZMQ_ORDER_PORT=5555
+      - ORACLE_PORT=5557
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      engine:
+        condition: service_healthy
+
+  swarm:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: chronos_swarm
+    environment:
+      - ZMQ_HOST=engine
+      - ZMQ_ORDER_PORT=5555
+      - ZMQ_DATA_PORT=5556
+    depends_on:
+      engine:
+        condition: service_healthy
+
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: chronos_bridge
+    ports:
+      - "8000:8000"
+    environment:
+      - ZMQ_HOST=engine
+      - ZMQ_ORDER_PORT=5555
+      - ZMQ_DATA_PORT=5556
+      - ORACLE_HOST=oracle
+      - ORACLE_PORT=5557
+      - BRIDGE_HOST=0.0.0.0
+      - BRIDGE_PORT=8000
+    depends_on:
+      engine:
+        condition: service_healthy
+      oracle:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: chronos_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - bridge
