@@ -145,27 +145,31 @@ latch**, and the oracle's real fallback matrix.
 
 See `Chronos_Phase2_Master_Plan.html` for the complete plan.
 
-## Docker (merged in, not yet wired to this build)
+## Docker & the two front-ends
 
-A teammate built a parallel Docker/React track on top of the old Phase-1 `true_engine.py`
-before this Phase-2 rewrite landed. The infra is genuinely useful and has been merged in as-is;
-two things are worth knowing before you reach for it:
+The Docker track and the Vite/React `frontend/` were built in parallel against the old Phase-1
+`true_engine.py`, before this Phase-2 rewrite landed, and were merged in once both branches were
+reconciled. What that merge settled:
 
-- **The containers now point at the real services.** `Dockerfile.engine` ran `python
-  true_engine.py`, which no longer exists — it's been repointed at `python -m engine.server`
-  (this build's actual entry point). The other four Dockerfiles (`bridge`, `oracle`, `agents`,
-  `frontend`) already matched this build's entry points (`bridge.py`, `oracle.py`, `main.py`) and
-  needed no change.
-- **The bundled `frontend/` (Vite/React) talks to the old wire protocol, not PROTOCOL.md.** It
-  opens `ws://localhost:8000/ws` and sends `{"action": "start_sim", ...}`-style messages — that
-  was the old Flask/REQ-REP bridge's contract. This build's bridge speaks the two-plane protocol
-  in `PROTOCOL.md`/`PROTOCOL_V2.md` (REST for control, `{"topic","data"}` envelopes over `/ws` for
-  market data) and serves its own dashboard directly (`swarm_orchestrator/dashboard/`, the terminal
-  UI described above) at `http://localhost:8000/`. Until `frontend/`'s data layer is rewired to
-  that contract, treat it as a design reference rather than a working alternate UI.
+- **Backend is this build's.** Push-based PUB/SUB two-plane transport, `DEALER` + `asyncio.Lock`
+  control sockets, and no synthesized OHLC — price and bars come only from real fills
+  (PROTOCOL §8.1). The parallel branch's REQ/REP polling bridge and its `random.uniform` candle
+  jitter were both dropped by agreement.
+- **Containers point at the real services.** `Dockerfile.engine` ran `python true_engine.py`,
+  which no longer exists — repointed at `python -m engine.server`. The other four (`bridge`,
+  `oracle`, `agents`, `frontend`) already matched this build's entry points.
+- **`frontend/` is not wired to PROTOCOL.md yet.** It still opens `ws://localhost:8000/ws` and
+  sends `{"action": "start_sim", ...}` — the old bridge's contract. This build expects REST for
+  control (`POST /api/sim/start|stop`, `/api/news`, …) and `{"topic","data"}` envelopes over `/ws`
+  for market data. Rewiring it is owned by the author of the React app.
+
+**Direction:** React becomes the primary shell over time, with the V2 feature views (copilot,
+Monte-Carlo, time machine, script library, results/PDF) ported across incrementally. Until that
+port is done, `swarm_orchestrator/dashboard/` remains the full-featured UI and the bridge keeps
+serving it — the bridge container copies `swarm_orchestrator/`, so both UIs ship side by side.
 
 ```bash
 docker-compose up --build
 ```
-brings up `engine`, `oracle`, `swarm`, `bridge` (serving the working dashboard on `:8000`), and
-`frontend` (the React shell on `:3000`, not yet functional against this backend).
+brings up `engine`, `oracle`, `swarm`, `bridge` (REST/WS API + the full dashboard on `:8000`), and
+`frontend` (the React shell on `:3000`, pending the protocol rewire).
