@@ -28,3 +28,6 @@ swarm_orchestrator/data/scenarios/
 notebook/*.pdf
 graphify-out/
 tech_stack_rationale.html
+
+# Generated video projects (renders + audio are large build artifacts, ~66 MB)
+videos/
